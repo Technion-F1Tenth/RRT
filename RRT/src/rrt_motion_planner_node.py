@@ -1,13 +1,17 @@
 #!/usr/bin/env python
 import rospy, os, csv
+import numpy as np
+
 from nav_msgs.msg import OccupancyGrid
-from std_msgs.msg import Float64MultiArray
+from std_msgs.msg import Float64MultiArray, MultiArrayDimension, MultiArrayLayout
 from visualization_msgs.msg import Marker, MarkerArray
 
 class MotionPlanner(object):
     def __init__(self):
         self.occ_grid = None
-        self.opt_waypoints = self.set_optimal_waypoints(file_name='attempt1') # in the global frame
+        self.opt_waypoints = [i[1:3] for i in self.set_optimal_waypoints(file_name='levine_raceline')] # in the global frame
+        self.opt_waypoints = [self.opt_waypoints[j] for j in range(len(self.opt_waypoints)) if j % 5 == 0]
+        #print(self.opt_waypoints)
 
         wp_topic = '/rrt/waypoints'
         wp_viz_topic = '/rrt/wp_viz' # sending point visualization data
@@ -19,11 +23,23 @@ class MotionPlanner(object):
 
     def occ_grid_callback(self, grid_msg):
         self.occ_grid = grid_msg
-        new_waypoints = self.plan()
-        print(type(new_waypoints))
-        print(new_waypoints)
+        new_waypoints = self.plan() #[i[1:3] for i in self.plan()]
         wp_msg = Float64MultiArray()
-        wp_msg.data = new_waypoints
+        #wp_msg.data = np.reshape(new_waypoints, (1,-1))[0]
+        #print(new_waypoints[:][1:3])
+        #print(np.reshape(new_waypoints, (1,-1))[0])
+        wp_msg.data = np.reshape(new_waypoints, (1,-1))[0]
+        #print(list(np.shape(new_waypoints)))
+        dim0 = MultiArrayDimension()
+        #print(np.shape(new_waypoints)[1])
+        dim0.size = np.shape(new_waypoints)[0]
+        dim1 = MultiArrayDimension()
+        dim1.size = np.shape(new_waypoints)[1]
+
+        #layout = MultiArrayLayout()
+        #layout.dim = list()
+        wp_msg.layout.dim = [dim0, dim1]
+        #wp_msg.layout.dim[1].size = np.shape(new_waypoints)[1]
         self.wp_pub.publish(wp_msg)
 
     def set_optimal_waypoints(self, file_name):
@@ -32,7 +48,8 @@ class MotionPlanner(object):
         
         opt_waypoints = []
         with open(file_path) as csv_file:
-            csv_reader = csv.reader(csv_file, delimiter=',')
+            #csv_reader = csv.reader(csv_file, delimiter=',')
+            csv_reader = csv.reader(csv_file, delimiter=';')
             for waypoint in csv_reader:
                 opt_waypoints.append(waypoint)
         for index in range(0, len(opt_waypoints)):
@@ -88,7 +105,10 @@ class MotionPlanner(object):
 def main():
     rospy.init_node('rrt_mp_node')
     mp = MotionPlanner()
-    rospy.spin()
+    try:
+        rospy.spin()
+    except rospy.ROSInterruptException:
+        rospy.loginfo("Termination requested by user...")
 
 if __name__ == '__main__':
     print("RRT Motion Planner Initialized...")

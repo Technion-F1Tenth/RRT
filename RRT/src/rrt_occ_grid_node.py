@@ -127,23 +127,21 @@ class OccGrid(object):
         return map_msg
     
     def run(self):
-        while True:
-            if self.scan_ranges is None or self.current_position is None:
-                continue
+        #while True:
+        if self.scan_ranges is not None and self.current_position is not None:
+            #return #continue
             #print(self.scan_ranges, self.scan_angles, self.current_position, self.current_orientation)
+            #print('yo')
             self.fill_grid(self.scan_ranges, self.scan_angles, self.current_position, self.current_orientation)
             map_msg = self.fill_message()
             self.occ_grid_pub.publish(map_msg)
-            rospy.sleep(GRID_UPDATE_TIME) # tune the wait-time between grid updates
+        #rospy.sleep(GRID_UPDATE_TIME) # tune the wait-time between grid updates
     
 def main():
     rospy.init_node('rrt_occ_grid_node')
     occ_grid = OccGrid()
-    try:
+    while not rospy.is_shutdown():
         occ_grid.run()
-    except rospy.ROSInterruptException:
-        rospy.loginfo("Termination requested by user...")
-    #rospy.spin()
 
 if __name__ == '__main__':
     print("Occupancy Grid Constructor Initialized...")
