@@ -1,0 +1,40 @@
+## Common Topics
+drive_topic: '/drive' # '/vesc/ackermann_cmd_mux/input/navigation', sending drive commands
+scan_topic: '/scan' # receiving LiDAR data
+odom_topic: '/odom' # '/pf/pose/odom', receiving odometry data
+brake_bool_topic: '/brake_bool'
+
+## Custom Topics
+occ_grid_topic: '/rrt/occ_grid' # sending occupancy grid to this topic
+wp_topic: '/rrt/waypoints' # sending waypoints to this topic
+#global_wp_viz_topic: '/rrt/global_wp_viz' # sending waypoint visualization data to this topic
+raceline_viz_topic: '/rrt/raceline_viz' # sending raceline visualization data to this topic
+sample_viz_topic: '/rrt/sample_viz' # sending sample visualization data to this topic
+plan_viz_topic: '/rrt/plan_viz' # sending plan visualization data to this topic
+target_viz_topic: '/rrt/target_viz' # sending target point visualization data
+
+## Map & Driving Choices
+LEVINE: True # If using Levine map
+SPIELBERG: False # If using Spielberg map
+NO_RRT: True # Drive using only pure pursuit on the global optimal raceline
+DRIVE: True # Drive the car with pure pursuit
+SLOW_MODE: False # Drive slowly
+VERBOSE: False # Print the steering angles and velocites given by pure pursuit
+
+## Occupancy Grid Node
+WIDTH: 15 #[cells], grid-frame x-direction
+LENGTH: 15 #[cells], grid-frame y-direction
+RESOLUTION: 0.2 #0.05 #[m/cell]
+#LIDAR_X_OFFSET: 0.275 #[m]
+GRID_UPDATE_TIME: 0.5 #[sec]
+
+## RRT Parameters
+GOAL_BIAS: 0.2 # Probability of sampling the goal point during tree-building
+
+## Pure Pursuit Node
+MAX_STEERING_ANGLE: 80 #[deg], Servo steering angle limits
+LOOKAHEAD_IDX: 5 # Number of indices ahead to look for choosing the next waypoint to pursue
+MIN_LOOKAHEAD_DISTANCE: 1.0 #[m]
+MAX_LOOKAHEAD_DISTANCE: 2.0 #[m]
+MAX_VELOCITY: 2.0 #[m/s], Maximum velocity of the car
+#KP: 0.325 # same as wheelbase length (in meters)
