@@ -8,9 +8,10 @@ from nav_msgs.msg import Odometry
 from std_msgs.msg import Float64MultiArray
 
 # Mode for always driving the car slowly
+DRIVE = True
 SLOW_MODE = False
 ADAPTIVE = True
-CLOCKWISE = False
+#CLOCKWISE = False
 VERBOSE = False
 
 # Servo steering angle limits
@@ -18,11 +19,11 @@ MAX_STEERING_ANGLE = np.deg2rad(80)
 MIN_STEERING_ANGLE = -MAX_STEERING_ANGLE
 
 # Tunable parameters
-LOOKAHEAD_IDX = 10
-MIN_LOOKAHEAD_DISTANCE = 1.0
-MAX_LOOKAHEAD_DISTANCE = 2.0
+LOOKAHEAD_IDX = 5
+#MIN_LOOKAHEAD_DISTANCE = 1.0
+#MAX_LOOKAHEAD_DISTANCE = 2.0
 KP = 0.325 # wheelbase length (in meters)
-MAX_VELOCITY = 2.5
+MAX_VELOCITY = 2.0
 
 # Choose map
 LEVINE = True
@@ -31,15 +32,15 @@ SPIELBERG = False
 class PurePursuit(object):
     """ The class that handles the pure pursuit controller """
     def __init__(self):
-        self.min_lookahead_distance = MIN_LOOKAHEAD_DISTANCE
-        self.max_lookahead_distance = MAX_LOOKAHEAD_DISTANCE
+        #self.min_lookahead_distance = MIN_LOOKAHEAD_DISTANCE
+        #self.max_lookahead_distance = MAX_LOOKAHEAD_DISTANCE
         self.kp = KP
         #self.waypoints = None
         if LEVINE:
             self.opt_waypoints = [i[1:3] for i in self.set_optimal_waypoints(file_name='levine_raceline')] # in the global frame
         elif SPIELBERG:
             self.opt_waypoints = [i[:2] for i in self.set_optimal_waypoints(file_name='Spielberg_raceline')] # in the global frame
-        self.waypoints = self.opt_waypoints #[self.opt_waypoints[j] for j in range(len(self.opt_waypoints)) if j % 3 == 0]
+        self.waypoints = [self.opt_waypoints[j] for j in range(len(self.opt_waypoints)) if j % 3 == 0]
 
         self.last_wp_idx = None
         self.flag = False
@@ -67,12 +68,14 @@ class PurePursuit(object):
         euler_angles = tf.transformations.euler_from_quaternion([odom_msg.pose.pose.orientation.x, odom_msg.pose.pose.orientation.y, odom_msg.pose.pose.orientation.z, odom_msg.pose.pose.orientation.w])
         current_heading = euler_angles[2] # also known as the "heading"
 
-        self.transformation_matrix = np.array([[np.cos(-current_heading), -np.sin(-current_heading), current_position[0]], [np.sin(-current_heading), np.cos(-current_heading), current_position[1]], [0, 0, 1]])
+        #self.transformation_matrix = np.array([[np.cos(-current_heading), -np.sin(-current_heading), current_position[0]], [np.sin(-current_heading), np.cos(-current_heading), current_position[1]], [0, 0, 1]])
+        self.transformation_matrix = np.array([[np.cos(current_heading), -np.sin(current_heading), current_position[0]], [np.sin(current_heading), np.cos(current_heading), current_position[1]], [0, 0, 1]])
 
         #print(np.rad2deg(current_heading))
         if self.waypoints is not None:
             drive_msg, target_marker = self.pursue(self.waypoints, current_position, current_heading)
-            #self.drive_pub.publish(drive_msg)
+            if DRIVE:
+                self.drive_pub.publish(drive_msg)
             self.target_pub.publish(target_marker)
 
     def get_velocity(self, steering_angle):
