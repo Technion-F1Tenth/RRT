@@ -1,0 +1,6 @@
+<?xml version="1.0"?>
+<launch>
+  <node name="rrt_motion_planner_node" pkg="rrt" type="rrt_motion_planner_node.py" output="screen"></node>
+  <node name="rrt_occ_grid_node" pkg="rrt" type="rrt_occ_grid_node.py" output="screen"></node>
+  <node name="rrt_pure_pursuit_node" pkg="rrt" type="rrt_pure_pursuit_node.py" output="screen"></node>
+</launch>
