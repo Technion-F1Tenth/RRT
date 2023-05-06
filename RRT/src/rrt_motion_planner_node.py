@@ -11,8 +11,7 @@ class MotionPlanner(object):
         self.occ_grid = None
         self.opt_waypoints = [i[1:3] for i in self.set_optimal_waypoints(file_name='levine_raceline')] # in the global frame
         self.opt_waypoints = [self.opt_waypoints[j] for j in range(len(self.opt_waypoints)) if j % 5 == 0]
-        #print(self.opt_waypoints)
-
+        
         wp_topic = '/rrt/waypoints'
         wp_viz_topic = '/rrt/wp_viz' # sending point visualization data
         occ_grid_topic = '/rrt/occ_grid'
@@ -57,10 +56,20 @@ class MotionPlanner(object):
                 opt_waypoints[index][point] = float(opt_waypoints[index][point])
         return opt_waypoints
 
+    def find_nearest_waypoint(self, current_position):
+        """ Given the current XY position of the car, returns the index of the nearest waypoint """
+        ranges = []
+        for index in range(len(self.waypoints)):
+            eucl_d = self.calc_eucl_distance(current_position, self.waypoints[index]) #[:2]
+            ranges.append(eucl_d)
+        return ranges.index(min(ranges))
+
     def plan(self):
         markerArray = MarkerArray()
-        for i in range(len(self.opt_waypoints)):
-            wp_pos = self.opt_waypoints[i][:2]
+        nearest_wp_idx = self.find_nearest_waypoint(self.current_position)
+        #for i in range(len(self.opt_waypoints)):
+        for i in range(10):
+            wp_pos = self.opt_waypoints[nearest_wp_idx+i] #[:2]
             sample_marker = self.create_sample_marker(wp_pos)
             markerArray.markers.append(sample_marker)
         self.create_waypoint_marker_array(markerArray)
