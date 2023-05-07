@@ -1,17 +1,16 @@
 #!/usr/bin/env python
 import numpy as np
-import rospy
+import rospy, time
+from scipy import signal
 from sensor_msgs.msg import LaserScan
 from nav_msgs.msg import OccupancyGrid, Odometry
-from rrt_auxiliary import calc_transf_matrix, get_OccGrid_idx, check_edge_collision, in_OccGrid
+from rrt_auxiliary import calc_transf_matrix, laser_to_grid_idx, check_edge_collision, in_OccGrid, traverse_grid, grid_pos_to_global
 
 # Parameters
 WIDTH = rospy.get_param("/rrt_occ_grid_node/WIDTH") #[cells], number of cells in the grid-frame's x-direction
 LENGTH = rospy.get_param("/rrt_occ_grid_node/LENGTH") #[cells], number of cells in the grid-frame's y-direction
 RESOLUTION = rospy.get_param("/rrt_occ_grid_node/RESOLUTION") #[m/cell], size of the cells
-#LIDAR_X_OFFSET = rospy.get_param("/rrt_occ_grid_node/LIDAR_X_OFFSET") #[m], LiDAR frame translation from car frame
-LIDAR_X_OFFSET = rospy.get_param("/f1tenth_simulator/scan_distance_to_base_link") #[m], LiDAR frame translation from car frame
-GRID_UPDATE_TIME = rospy.get_param("/rrt_occ_grid_node/GRID_UPDATE_TIME") #[sec]
+#GRID_UPDATE_TIME = rospy.get_param("/rrt_occ_grid_node/GRID_UPDATE_TIME") #[sec]
 
 class OccGrid(object):
     def __init__(self):
@@ -60,22 +59,40 @@ class OccGrid(object):
     def fill_grid(self, scan_data, scan_angles, position, orientation):
         """ Fills the grid using the LiDAR data and the current pose of the car """
         trans, _ = calc_transf_matrix(position, orientation)
-        grid_origin_global_frame = np.dot(trans, [LIDAR_X_OFFSET, -(self.length*self.resolution)/2, 1])
+        #grid_origin_global_frame = np.dot(trans, [LIDAR_X_OFFSET, -(self.length*self.resolution)/2, 1])
+        grid_origin_global_frame = grid_pos_to_global(trans, [0,0], self.resolution, self.length)
         self.origin_x = grid_origin_global_frame[0] #We use the Pose to determine the position of the central bottom point of the grid
         self.origin_y = grid_origin_global_frame[1]
 
         for i in range(len(scan_data)):
             new_point = (scan_data[i]*np.cos(scan_angles[i]), scan_data[i]*np.sin(scan_angles[i])) #We use the Lidar data to determine where there are obstacles; in the LiDAR frame
             if in_OccGrid(new_point, self.resolution, self.width, self.length):
-                x_index, y_index = get_OccGrid_idx(new_point, self.resolution, self.length) # converts point in LiDAR frame to indices of grid
+                x_index, y_index = laser_to_grid_idx(new_point, self.resolution, self.length) # converts point in LiDAR frame to indices of grid
                 self.grid[x_index][y_index] = int(100) # obstacles are filled in the grid with a 100 (otherwise are -1) 
 
         outer_grids_idxs = self.get_grid_indices()
+        #for o in outer_grids_idxs:
+        #    point = self.get_pt_from_idx(o)
+        #    step = self.resolution #/2 # resolution parameter
+        #    self.grid = check_edge_collision([0,0], point, step, self.grid, self.resolution, self.width, self.length)
+
+        # Here we use the Fast Voxel Traversal Algorithm to populate the free cells - this method is 10x faster than our previous implementation!
+        lidar_origin_grid_idx = laser_to_grid_idx([0,0], self.resolution, self.length)
+        #print(lidar_origin_grid_idx)
         for o in outer_grids_idxs:
-            point = self.get_pt_from_idx(o)
-            step = self.resolution #/2 # resolution parameter
-            self.grid = check_edge_collision([0,0], point, step, self.grid, self.resolution, self.width, self.length)
+            free_cells = traverse_grid(lidar_origin_grid_idx, o)
+            for cell in free_cells:
+                #if self.grid[cell[0]][cell[1]] == int(100):
+                #    break
+                #else:
+                if self.grid[cell[0]][cell[1]] != int(100):
+                    self.grid[cell[0]][cell[1]] = int(0)
         return
+    
+    def convolve_occupancy_grid(self):
+        kernel = np.ones(shape=[2, 2])
+        self.grid = signal.convolve2d(self.grid.astype('int'), kernel.astype('int'), boundary='symm', mode='same')
+        self.grid = np.clip(self.grid, -1, 100)
 
     def fill_message(self):
         """ Puts all the data from the occupancy grid into a ROS message  """
@@ -88,19 +105,35 @@ class OccGrid(object):
         map_msg.data = self.grid.flatten()
         return map_msg
     
+    #def grid_to_origin(self, transformation_matrix, grid_frame_pos):
+    #    global_frame_pos = np.dot(transformation_matrix, [grid_frame_pos[0] + LIDAR_X_OFFSET, grid_frame_pos[1] - (self.length*self.resolution)/2, 1])
+    #    return global_frame_pos
+    
     def run(self):
-        if self.scan_ranges is not None and self.current_position is not None:
+        if self.scan_ranges is not None and self.scan_angles is not None and self.current_position is not None and self.current_orientation is not None:
             self.fill_grid(self.scan_ranges, self.scan_angles, self.current_position, self.current_orientation)
+            self.convolve_occupancy_grid()
             map_msg = self.fill_message()
             self.occ_grid_pub.publish(map_msg)
-        rospy.sleep(GRID_UPDATE_TIME) # tune the wait-time between grid updates
+        #rospy.sleep(GRID_UPDATE_TIME) # tune the wait-time between grid updates
 
 def main():
     rospy.init_node('rrt_occ_grid_node')
     occ_grid = OccGrid()
+    tot_time = 0; counter = 0
+    #rate = rospy.Rate(10)
     while not rospy.is_shutdown():
+        tic = time.time()
         occ_grid.grid.fill(int(-1))
         occ_grid.run()
+        toc = time.time() - tic
+        tot_time += toc
+        counter += 1
+        if counter % 10 == 0:
+            #print(tot_time / 10) 
+            tot_time = 0
+        #rate.sleep()
+
 
 if __name__ == '__main__':
     print("Occupancy Grid Constructor Initialized...")

@@ -3,6 +3,28 @@ import numpy as np
 import rospy, tf, os, csv
 from visualization_msgs.msg import Marker, MarkerArray
 
+LIDAR_X_OFFSET = rospy.get_param("/f1tenth_simulator/scan_distance_to_base_link") #[m], LiDAR frame translation from car frame
+
+## Coordinate transformations
+def laser_to_global(transformation_matrix, laser_pos):
+    global_pos = np.dot(transformation_matrix, [laser_pos[0] + LIDAR_X_OFFSET, laser_pos[1], 1])
+    return global_pos
+    
+def global_to_laser(transformation_matrix, global_pos):
+    laser_pos = np.dot(np.linalg.inv(transformation_matrix), [global_pos[0] + LIDAR_X_OFFSET, global_pos[1], 1])
+    return laser_pos
+
+def laser_to_grid_idx(point, grid_resolution, grid_length):
+    """ Returns the indices of where the point is found in the Occupancy Grid; the point is in the laser frame;
+        grid index directions are swapped (grid x is LiDAR frame y) """
+    x_index = (point[1]+(grid_length*grid_resolution)/2)//grid_resolution
+    y_index = point[0]//grid_resolution
+    return [int(x_index), int(y_index)]
+
+def grid_pos_to_global(transformation_matrix, grid_frame_pos, grid_resolution, grid_length):
+    global_frame_pos = np.dot(transformation_matrix, [grid_frame_pos[0] + LIDAR_X_OFFSET, grid_frame_pos[1] - (grid_length*grid_resolution)/2, 1])
+    return global_frame_pos
+
 ## Geometric functions
 
 class Line():
@@ -18,19 +40,15 @@ class Line():
 def calc_eucl_distance(array1, array2):
     return np.sqrt(np.power(array1[0] - array2[0], 2) + np.power(array1[1] - array2[1], 2))
  
-def calc_transf_matrix(position, orientation):
+def get_heading(orientation):
     euler_angles = tf.transformations.euler_from_quaternion(orientation)
-    heading = euler_angles[2]
+    return euler_angles[2]
+
+def calc_transf_matrix(position, orientation):
+    heading = get_heading(orientation)
     return np.array([[np.cos(heading), -np.sin(heading), position[0]], [np.sin(heading), np.cos(heading), position[1]], [0, 0, 1]]), heading
 
 ## Occupancy grid functions
-
-def get_OccGrid_idx(point, grid_resolution, grid_length):
-    """ Returns the indices of where the point is found in the Occupancy Grid; the point is in the laser frame;
-        grid index directions are swapped (grid x is LiDAR frame y) """
-    x_index = (point[1]+(grid_length*grid_resolution)/2)//grid_resolution
-    y_index = point[0]//grid_resolution
-    return [int(x_index), int(y_index)]
 
 def in_OccGrid(point, grid_resolution, grid_width, grid_length):
     """ Checks if an (x,y) point, given in the LiDAR frame, is in the occupancy grid """
@@ -38,6 +56,48 @@ def in_OccGrid(point, grid_resolution, grid_width, grid_length):
         if abs(point[1]) <= grid_resolution*grid_length/2:
             return True
     return False
+
+def traverse_grid(start, end):
+    """ Bresenham's line algorithm for fast voxel traversal; CREDIT TO: Rogue Basin;
+        CODE TAKEN FROM: http://www.roguebasin.com/index.php/Bresenham%27s_Line_Algorithm """
+    # Setup initial conditions
+    x1, y1 = start
+    x2, y2 = end
+    dx = x2 - x1
+    dy = y2 - y1
+
+    # Determine how steep the line is
+    is_steep = abs(dy) > abs(dx)
+
+    # Rotate line
+    if is_steep:
+        x1, y1 = y1, x1
+        x2, y2 = y2, x2
+
+    # Swap start and end points if necessary and store swap state
+    if x1 > x2:
+        x1, x2 = x2, x1
+        y1, y2 = y2, y1
+
+    # Recalculate differentials
+    dx = x2 - x1
+    dy = y2 - y1
+
+    # Calculate error
+    error = int(dx / 2.0)
+    ystep = 1 if y1 < y2 else -1
+
+    # Iterate over bounding box generating points between start and end
+    y = y1
+    points = []
+    for x in range(x1, x2 + 1):
+        coord = (y, x) if is_steep else (x, y)
+        points.append(coord)
+        error -= abs(dy)
+        if error < 0:
+            y += ystep
+            error += dx
+    return points
 
 def check_edge_collision(point_1, point_2, step, grid, grid_resolution, grid_width, grid_length, rrt=False):
         line = Line(point_1, point_2) # Need line between the two points
@@ -51,7 +111,7 @@ def check_edge_collision(point_1, point_2, step, grid, grid_resolution, grid_wid
 
         obstacle_seen = False
         for point in points_on_line:
-            grid_point = get_OccGrid_idx(point, grid_resolution, grid_length)
+            grid_point = laser_to_grid_idx(point, grid_resolution, grid_length)
             if grid_point[0] >= grid_width or grid_point[1] >= grid_length:
                 continue
 
@@ -94,7 +154,7 @@ def find_nearest_waypoint(current_position, waypoints):
 
 ## Visualization functions
 
-def create_point_marker(pos, goal=False):
+def create_point_marker(pos, goal=False, raceline=False):
     """ Given the position of a point, creates the necessary Marker data for RViZ visualization """
     marker = Marker()
     marker.header.frame_id = "map"
@@ -111,12 +171,14 @@ def create_point_marker(pos, goal=False):
     if goal:
         marker.scale.x, marker.scale.y, marker.scale.z = 0.2, 0.2, 0.2
         marker.color.g, marker.color.b = 1.0, 0.0
+    if raceline:
+        marker.color.r, marker.color.b = 1.0, 0.0
     return marker
 
 def create_raceline_marker_array(opt_waypoints):
     markerArray = MarkerArray()
     for i in range(len(opt_waypoints)):
-        marker = create_point_marker(opt_waypoints[i])
+        marker = create_point_marker(opt_waypoints[i], raceline=True)
         markerArray.markers.append(marker)
     id = 0
     for m in markerArray.markers:
