@@ -16,20 +16,19 @@ target_viz_topic: '/rrt/target_viz' # sending target point visualization data
 ## Map & Driving Choices
 LEVINE: True # If using Levine map
 SPIELBERG: False # If using Spielberg map
-NO_RRT: True # Drive using only pure pursuit on the global optimal raceline
+NO_RRT: False # Drive using only pure pursuit on the global optimal raceline
 DRIVE: True # Drive the car with pure pursuit
-SLOW_MODE: False # Drive slowly
-VERBOSE: False # Print the steering angles and velocites given by pure pursuit
+SLOW_MODE: True # Drive slowly
+VERBOSE: True # Print the steering angles and velocites given by pure pursuit
 
 ## Occupancy Grid Node
 WIDTH: 15 #[cells], grid-frame x-direction
 LENGTH: 15 #[cells], grid-frame y-direction
-RESOLUTION: 0.2 #0.05 #[m/cell]
-#LIDAR_X_OFFSET: 0.275 #[m]
+RESOLUTION: 0.1 #0.05 #[m/cell]
 GRID_UPDATE_TIME: 0.5 #[sec]
 
 ## RRT Parameters
-GOAL_BIAS: 0.2 # Probability of sampling the goal point during tree-building
+GOAL_BIAS: 0.5 # Probability of sampling the goal point during tree-building
 
 ## Pure Pursuit Node
 MAX_STEERING_ANGLE: 80 #[deg], Servo steering angle limits
