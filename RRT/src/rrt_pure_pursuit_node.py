@@ -22,7 +22,7 @@ MIN_STEERING_ANGLE = -MAX_STEERING_ANGLE
 LOOKAHEAD_IDX = rospy.get_param("/rrt_pure_pursuit_node/LOOKAHEAD_IDX")
 #MIN_LOOKAHEAD_DISTANCE = 1.0
 #MAX_LOOKAHEAD_DISTANCE = 2.0
-KP = 0.5*rospy.get_param("/f1tenth_simulator/wheelbase") # 0.325 # wheelbase length (in meters)
+KP = rospy.get_param("/f1tenth_simulator/wheelbase") # 0.325 # wheelbase length (in meters)
 MAX_VELOCITY = rospy.get_param("/rrt_pure_pursuit_node/MAX_VELOCITY") #[m/s]
 
 # Choose map
@@ -76,7 +76,7 @@ class PurePursuit(object):
     def get_velocity(self, steering_angle):
         """ Given the desired steering angle, returns the appropriate velocity to publish to the car """
         if SLOW_MODE:
-            return 0.3 #0.8
+            return 0.5
         velocity = max(MAX_VELOCITY - abs(np.rad2deg(steering_angle))/50, 0.8) # Velocity varies smoothly with steering angle
         return velocity
     

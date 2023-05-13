@@ -59,7 +59,6 @@ class OccGrid(object):
     def fill_grid(self, scan_data, scan_angles, position, orientation):
         """ Fills the grid using the LiDAR data and the current pose of the car """
         trans, _ = calc_transf_matrix(position, orientation)
-        #grid_origin_global_frame = np.dot(trans, [LIDAR_X_OFFSET, -(self.length*self.resolution)/2, 1])
         grid_origin_global_frame = grid_pos_to_global(trans, [0,0], self.resolution, self.length)
         self.origin_x = grid_origin_global_frame[0] #We use the Pose to determine the position of the central bottom point of the grid
         self.origin_y = grid_origin_global_frame[1]
@@ -70,22 +69,15 @@ class OccGrid(object):
                 x_index, y_index = laser_to_grid_idx(new_point, self.resolution, self.length) # converts point in LiDAR frame to indices of grid
                 self.grid[x_index][y_index] = int(100) # obstacles are filled in the grid with a 100 (otherwise are -1) 
 
-        outer_grids_idxs = self.get_grid_indices()
-        #for o in outer_grids_idxs:
-        #    point = self.get_pt_from_idx(o)
-        #    step = self.resolution #/2 # resolution parameter
-        #    self.grid = check_edge_collision([0,0], point, step, self.grid, self.resolution, self.width, self.length)
-
         # Here we use the Fast Voxel Traversal Algorithm to populate the free cells - this method is 10x faster than our previous implementation!
         lidar_origin_grid_idx = laser_to_grid_idx([0,0], self.resolution, self.length)
-        #print(lidar_origin_grid_idx)
+        outer_grids_idxs = self.get_grid_indices()
         for o in outer_grids_idxs:
             free_cells = traverse_grid(lidar_origin_grid_idx, o)
             for cell in free_cells:
-                #if self.grid[cell[0]][cell[1]] == int(100):
-                #    break
-                #else:
-                if self.grid[cell[0]][cell[1]] != int(100):
+                if self.grid[cell[0]][cell[1]] == int(100):
+                    break
+                else:
                     self.grid[cell[0]][cell[1]] = int(0)
         return
     
@@ -112,7 +104,7 @@ class OccGrid(object):
     def run(self):
         if self.scan_ranges is not None and self.scan_angles is not None and self.current_position is not None and self.current_orientation is not None:
             self.fill_grid(self.scan_ranges, self.scan_angles, self.current_position, self.current_orientation)
-            self.convolve_occupancy_grid()
+            #self.convolve_occupancy_grid()
             map_msg = self.fill_message()
             self.occ_grid_pub.publish(map_msg)
         #rospy.sleep(GRID_UPDATE_TIME) # tune the wait-time between grid updates
@@ -120,20 +112,25 @@ class OccGrid(object):
 def main():
     rospy.init_node('rrt_occ_grid_node')
     occ_grid = OccGrid()
+    
+    #rate = rospy.Rate(0.5)
+    check_time = False
     tot_time = 0; counter = 0
-    #rate = rospy.Rate(10)
     while not rospy.is_shutdown():
-        tic = time.time()
-        occ_grid.grid.fill(int(-1))
-        occ_grid.run()
-        toc = time.time() - tic
-        tot_time += toc
-        counter += 1
-        if counter % 10 == 0:
-            #print(tot_time / 10) 
-            tot_time = 0
+        if check_time:
+            tic = time.time()
+            occ_grid.grid.fill(int(-1))
+            occ_grid.run()
+            toc = time.time() - tic
+            tot_time += toc
+            counter += 1
+            if counter % 100 == 0:
+                print(tot_time / 100) 
+                tot_time = 0
+        else:
+            occ_grid.grid.fill(int(-1))
+            occ_grid.run()
         #rate.sleep()
-
 
 if __name__ == '__main__':
     print("Occupancy Grid Constructor Initialized...")

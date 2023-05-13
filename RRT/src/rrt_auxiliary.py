@@ -68,17 +68,19 @@ def traverse_grid(start, end):
 
     # Determine how steep the line is
     is_steep = abs(dy) > abs(dx)
-
+    
     # Rotate line
     if is_steep:
         x1, y1 = y1, x1
         x2, y2 = y2, x2
 
     # Swap start and end points if necessary and store swap state
+    swapped = False
     if x1 > x2:
         x1, x2 = x2, x1
         y1, y2 = y2, y1
-
+        swapped = True
+        
     # Recalculate differentials
     dx = x2 - x1
     dy = y2 - y1
@@ -97,6 +99,9 @@ def traverse_grid(start, end):
         if error < 0:
             y += ystep
             error += dx
+            
+    if swapped:
+        points = points[::-1]
     return points
 
 def check_edge_collision(point_1, point_2, step, grid, grid_resolution, grid_width, grid_length, rrt=False):

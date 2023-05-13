@@ -12,10 +12,11 @@ class RRTTree(object):
         self.vertices[vid] = Node(pos=pos, parent=parent)
         return vid
 
-    def add_edge(self, start_id, end_id):#, edge_cost=0):
+    def add_edge(self, start_id, end_id, edge_cost=0, RRT_Star=False):
         """ Adds an edge to the tree """
         self.edges[end_id] = start_id
-        #self.vertices[eid].set_cost(cost=self.vertices[sid].cost + edge_cost)
+        if RRT_Star:
+            self.vertices[end_id].set_cost(cost=self.vertices[start_id].cost + edge_cost)
 
     def get_vertex_for_pos(self, pos):
         """ Search for the vertex with the given config and return it if exists """
@@ -45,9 +46,31 @@ class RRTTree(object):
 
     def compute_distance(self, pos1, pos2):
         return np.linalg.norm(np.subtract(pos1,pos2), 2)
+    
+    def get_k_nearest_neighbors(self, pos, k):
+        '''
+        Return k-nearest neighbors
+        @param state Sampled state.
+        @param k Number of nearest neighbors to retrieve.
+        '''
+        dists = []
+        for _, vertex in self.vertices.items():
+            dists.append(self.compute_distance(pos, vertex.pos))
+
+        dists = np.array(dists)
+        knn_ids = np.argpartition(dists, k)[:k]
+        #knn_dists = [dists[i] for i in knn_ids]
+
+        return knn_ids.tolist(), [self.vertices[vid].pos for vid in knn_ids]
 
 class Node(object):
-    def __init__(self, pos, parent=None):
+    def __init__(self, pos, cost=0, parent=None):
         self.pos = pos # LiDAR frame
         self.parent = parent
-        #self.cost = None # only used in RRT*
+        self.cost = cost # only used in RRT*
+    
+    def set_cost(self, cost):
+        '''
+        Set the cost of the vertex.
+        '''
+        self.cost = cost
