@@ -19,12 +19,12 @@ SPIELBERG: False # If using Spielberg map
 NO_RRT: False # Drive using only pure pursuit on the global optimal raceline
 DRIVE: True # Drive the car with pure pursuit
 SLOW_MODE: True # Drive slowly
-VERBOSE: True # Print the steering angles and velocites given by pure pursuit
+VERBOSE: False # Print the steering angles and velocites given by pure pursuit
 
 ## Occupancy Grid Node
-WIDTH: 15 #[cells], grid-frame x-direction
-LENGTH: 15 #[cells], grid-frame y-direction
-RESOLUTION: 0.1 #0.05 #[m/cell]
+WIDTH: 50 #[cells], grid-frame x-direction
+LENGTH: 50 #[cells], grid-frame y-direction
+RESOLUTION: 0.05 #0.05 #[m/cell]
 GRID_UPDATE_TIME: 0.5 #[sec]
 
 ## RRT Parameters
@@ -35,5 +35,5 @@ MAX_STEERING_ANGLE: 80 #[deg], Servo steering angle limits
 LOOKAHEAD_IDX: 5 # Number of indices ahead to look for choosing the next waypoint to pursue
 MIN_LOOKAHEAD_DISTANCE: 1.0 #[m]
 MAX_LOOKAHEAD_DISTANCE: 2.0 #[m]
-MAX_VELOCITY: 2.0 #[m/s], Maximum velocity of the car
+MAX_VELOCITY: 0.5 #2.5 #[m/s], Maximum velocity of the car
 #KP: 0.325 # same as wheelbase length (in meters)
