@@ -68,6 +68,7 @@ class Node(object):
         self.pos = pos # LiDAR frame
         self.parent = parent
         self.cost = cost # only used in RRT*
+        self.phi_0 = 0
     
     def set_cost(self, cost):
         '''

@@ -11,21 +11,26 @@ from rrt_tree import RRTTree
 from rrt_auxiliary import *
 
 # RRT parameters
-GOAL_BIAS = 0.5 #rospy.get_param("/rrt_motion_planner_node/GOAL_BIAS")
+GOAL_BIAS = rospy.get_param("/rrt_motion_planner_node/GOAL_BIAS")
 EXT_MODE = 'E1'
 # Choose map
 LEVINE = rospy.get_param("/rrt_motion_planner_node/LEVINE")
 SPIELBERG = rospy.get_param("/rrt_motion_planner_node/SPIELBERG")
-
+# Get occ. grid and velocity parameters
 LENGTH = rospy.get_param("/rrt_motion_planner_node/LENGTH") #[cells], number of cells in the grid-frame's y-direction
 RESOLUTION = rospy.get_param("/rrt_motion_planner_node/RESOLUTION") #[m/cell], size of the cells
 MAX_VELOCITY = rospy.get_param("/rrt_motion_planner_node/MAX_VELOCITY") #[m/s]
+MAX_STEERING_ANGLE = rospy.get_param("/rrt_motion_planner_node/MAX_STEERING_ANGLE") #[deg]
+# Calculate the needed replan time
+REPLAN_TIME = np.floor(LENGTH * RESOLUTION / MAX_VELOCITY) #[sec]
+REPLAN_RATE = 1 / REPLAN_TIME #[Hz]
 
-replan_time = np.floor(LENGTH * RESOLUTION / MAX_VELOCITY) #[sec]
-replan_rate = 1 / replan_time #[Hz]
+MAX_STEERING_ANGLE = rospy.get_param("/f1tenth_simulator/max_steering_vel") #[radians/sec]
 
 class MotionPlanner(object):
     def __init__(self):
+        self.current_position, self.current_orientation = None, None
+
         ## Occupancy grid stuff
         self.occ_grid, self.grid_resolution, self.grid_width, self.grid_length = None, None, None, None
 
@@ -37,14 +42,6 @@ class MotionPlanner(object):
         self.opt_waypoints = [opt_waypoints[j] for j in range(len(opt_waypoints)) if j % 3 == 0]
         self.raceline_markers = create_raceline_marker_array(self.opt_waypoints)
 
-        ## RRT Stuff
-        self.RRT_Star = False
-        self.goal_bias = GOAL_BIAS
-        self.k = 3
-        self.current_position, self.current_orientation = None, None
-        self.smoothing = True
-        self.check_goal_first = True
-        
         ## Data Topics
         wp_topic = rospy.get_param("/rrt_motion_planner_node/wp_topic") # sending waypoints to this topic
         occ_grid_topic = rospy.get_param("/rrt_motion_planner_node/occ_grid_topic") # reading the occupancy grid from this topic
@@ -75,7 +72,7 @@ class MotionPlanner(object):
         self.current_orientation = [odom_msg.pose.pose.orientation.x, odom_msg.pose.pose.orientation.y, odom_msg.pose.pose.orientation.z, odom_msg.pose.pose.orientation.w]
         self.transformation_matrix, _ = calc_transf_matrix(self.current_position, self.current_orientation)
         self.raceline_pub.publish(self.raceline_markers)
-    
+
     def create_waypoint_message(self, waypoints):
         wp_msg = Float64MultiArray()
         wp_msg.data = np.reshape(waypoints, (1,-1))[0]
@@ -121,6 +118,119 @@ class MotionPlanner(object):
         else:
             False
 
+    def create_waypoint_marker_array(self, markerArray, sample=True):
+        id = 0
+        for m in markerArray.markers:
+            m.id = id
+            id += 1
+        if sample:
+            self.sample_viz_pub.publish(markerArray)
+        else:
+            self.plan_viz_pub.publish(markerArray)
+        return
+    
+    def create_plan_marker(self, plan):
+        """ Given a plan, creates the necessary Marker data for RViZ visualization """
+        marker = Marker()
+        marker.header.frame_id, marker.header.stamp = "map", rospy.Time.now()
+        marker.id, marker.action, marker.type = 0, 0, 5 # ID, adds the marker, line_list
+
+        for p in range(len(plan)-1):
+            pt1 = Point()
+            pt1_global = laser_to_global(self.transformation_matrix, plan[p])
+            pt1.x, pt1.y = pt1_global[0], pt1_global[1]
+            marker.points.append(pt1)
+
+            pt2 = Point()
+            pt2_global = laser_to_global(self.transformation_matrix, plan[p+1])
+            pt2.x, pt2.y = pt2_global[0], pt2_global[1]
+            marker.points.append(pt2)
+
+        marker.scale.x, marker.color.a = 0.1, 1.0
+        marker.color.r, marker.color.g, marker.color.b = 1.0, 0.0, 0.0 
+        marker.pose.orientation.x, marker.pose.orientation.y = 0.0, 0.0
+        marker.pose.orientation.z, marker.pose.orientation.w = 0.0, 1.0
+        return marker
+
+    def collision_check(self, sample_pos, nearest_neighbor_pos):
+        pos_grid_idx = laser_to_grid_idx(sample_pos, self.grid_resolution, self.grid_length)
+        nearest_grid_idx = laser_to_grid_idx(nearest_neighbor_pos, self.grid_resolution, self.grid_length)
+        free_cells = traverse_grid(nearest_grid_idx, pos_grid_idx)
+        for cell in free_cells:
+            if (cell[0] * cell[1] < 0) or (cell[0] >= self.grid_width) or (cell[1] >= self.grid_length):
+                continue
+            if self.occ_grid[cell[0]][cell[1]] == int(100):
+                return False
+        return True
+    
+    def sample(self, free_only = True):
+        """ This method should randomly sample the free space, and returns a viable point """
+        if free_only:
+            i, j = np.random.randint(self.grid_width), np.random.randint(self.grid_length)
+            while self.occ_grid[i][j] != int(0):
+                i, j = np.random.randint(self.grid_width), np.random.randint(self.grid_length)
+            
+            upper_bound_x = (j + 1)*self.grid_resolution
+            lower_bound_x = (j)*self.grid_resolution
+            upper_bound_y = (i + 1 - self.grid_length/2)*self.grid_resolution
+            lower_bound_y = (i - self.grid_length/2)*self.grid_resolution 
+
+            x = np.random.uniform(low=lower_bound_x, high=upper_bound_x)
+            y = np.random.uniform(low=lower_bound_y, high=upper_bound_y)
+        else:
+            x = np.random.uniform(low=0, high=self.grid_resolution*self.grid_width)
+            y = np.random.uniform(low=-self.grid_resolution*self.grid_length/2, high=self.grid_resolution*self.grid_length/2)
+        return [x,y]
+
+    #Takes in an array of 2d points. Need to smooth the path from start to end (not bumping into obstacles)
+    def smooth_tree(self, path):
+        current_point = path[0] # first point
+        path_to_check = path
+        final_path = []
+        while not (current_point[0] == path[len(path)-1][0] and current_point[1] == path[len(path)-1][1]): # while first point is not end point
+            for i in range(len(path_to_check)):
+                point_to_check = path_to_check[len(path_to_check)-1-i] #check points from back to front
+                if self.collision_check(current_point, point_to_check):  #if don't collide
+                    path_to_check = path_to_check[len(path_to_check)-1-i:] #rest of path to check 
+                    final_path.append(current_point) #add previous node to path 
+                    current_point = point_to_check #next node to check is first node in new path
+                    break
+        final_path.append(path[len(path)-1])
+        return final_path
+    
+    # pos is last point in path, nearest_vert is parent of pos
+    def get_plan_from_tree(self, current_pos, current_idx, nearest_vert):
+        plan = [current_pos]
+        child_idx = current_idx
+        parent_pos = nearest_vert[1]
+        while self.tree.edges[child_idx]:
+            plan.append(parent_pos)
+            child_idx = self.tree.get_idx_for_pos(parent_pos)
+            parent_idx = self.tree.edges[child_idx] # new parent
+            parent_pos = self.tree.vertices[parent_idx].pos
+        plan.append(parent_pos)
+        plan = plan[::-1]
+        return plan
+    
+    def run(self):
+        if self.current_position is not None and self.current_orientation is not None:
+            self.tree = RRTTree()
+            self.tree.add_vertex([0,0], parent=None)
+            new_waypoints = self.plan()
+            if new_waypoints is not None:
+                wp_msg = self.create_waypoint_message(new_waypoints)
+                self.wp_pub.publish(wp_msg)
+                plan_marker = self.create_plan_marker(new_waypoints)
+                self.plan_viz_pub.publish(plan_marker)
+    
+class RRT_Planner(MotionPlanner):
+    def __init__(self):
+        MotionPlanner.__init__(self)
+        ## RRT Stuff
+        self.goal_bias = GOAL_BIAS
+        self.smoothing = True
+        self.check_goal_first = True
+        
     def plan(self):
         sample_array = MarkerArray()
         goal_pos = self.get_goal_point()
@@ -139,10 +249,10 @@ class MotionPlanner(object):
             else:
                 goal_added = False
         
-        num_iter = 0; goal_added = False; num_rewires = 0
+        num_iter = 0; goal_added = False
         while not goal_added:
-            if num_iter > 1000:
-                return [self.tree.vertices[0].pos, goal_pos]
+            #if num_iter > 1000:
+            #    return [self.tree.vertices[0].pos, goal_pos]
 
             num_iter += 1
             goal = False
@@ -192,170 +302,191 @@ class MotionPlanner(object):
             # Check obstacle-collision for potential edge
             if self.collision_check(pos, nearest_vert[1]):
                 pos_idx = self.tree.add_vertex(pos, nearest_vert)
-                if self.RRT_Star:
-                    cost = self.tree.compute_distance(pos, nearest_vert[1])
-                    self.tree.add_edge(nearest_vert_idx, pos_idx, edge_cost=cost, RRT_Star=True)
-                else:
-                    self.tree.add_edge(nearest_vert_idx, pos_idx)
+                self.tree.add_edge(nearest_vert_idx, pos_idx)
                 if goal: # and self.ext_mode == 'E1':
                     goal_added = True
-                
-                if self.RRT_Star:
-                    # rewiring phase
-                    if len(self.tree.vertices) > self.k:
-                        knn_idxs, knn_states = self.tree.get_k_nearest_neighbors(pos, self.k)
-                        for i in range(len(knn_states)):
-                            if knn_idxs[i] == pos_idx:
-                                continue
-                            #env.edge_validity_checker(knn_states[i],s):
-                            if self.collision_check(knn_states[i], pos):
-                                old_cost = self.tree.vertices[pos_idx].cost
-                                # calculating the potential new cost for the sample
-                                c = self.tree.compute_distance(knn_states[i], pos)
-                                potential_parent_cost = self.tree.vertices[knn_idxs[i]].cost
-                                potential_new_cost = potential_parent_cost + c
-                                # checking for improvement
-                                if potential_new_cost < old_cost:
-                                    self.tree.vertices[pos_idx].cost = potential_new_cost
-                                    self.tree.edges[pos_idx] = knn_idxs[i]
-                                    num_rewires += 1
-                        for i in range(len(knn_states)):
-                            if knn_idxs[i] == pos_idx:
-                                continue
-                            #if env.edge_validity_checker(s,knn_states[i]):
-                            if self.collision_check(pos, knn_states[i]):
-                                old_cost = self.tree.vertices[knn_idxs[i]].cost
-                                # calculating the potential new cost for the neighbors
-                                c = self.tree.compute_distance(pos, knn_states[i])
-                                potential_parent_cost = self.tree.vertices[pos_idx].cost
-                                potential_new_cost = potential_parent_cost + c
-                                # checking for improvement
-                                if potential_new_cost < old_cost:
-                                    self.tree.vertices[knn_idxs[i]].cost = potential_new_cost
-                                    self.tree.edges[knn_idxs[i]] = pos_idx
-                                    num_rewires += 1
             else:
                 goal_added = False
         #self.create_waypoint_marker_array(sample_array)
-        #print(num_rewires)
+        
         # Record the plan
-        plan = []
-        plan.append(pos)
-        child_idx = pos_idx
-        parent_pos = nearest_vert[1]
-        while self.tree.edges[child_idx]:
-            plan.append(parent_pos)
-            child_idx = self.tree.get_idx_for_pos(parent_pos)
-            parent_idx = self.tree.edges[child_idx] # new parent
-            parent_pos = self.tree.vertices[parent_idx].pos
-        plan.append(parent_pos)
-        plan = plan[::-1]
+        plan = self.get_plan_from_tree(pos, pos_idx, nearest_vert)
+        if self.smoothing:
+            plan = self.smooth_tree(plan)
+        return plan
+
+class RRTStar_Planner(MotionPlanner):
+    def __init__(self):
+        MotionPlanner.__init__(self)
+        ## RRT Stuff
+        self.goal_bias = GOAL_BIAS
+        self.check_goal_first = True
+        self.smoothing = True
+        self.k = 3
+        
+    def plan(self):
+        sample_array = MarkerArray()
+        goal_pos = self.get_goal_point()
+        if goal_pos is None:
+            print("Hey, I'm the problem - it's me!")
+            return None
+        
+        # First, we see if the goal point is directly reachable from the root node (i.e. the local geometry is simple enough)
+        if self.check_goal_first:       
+            pos = goal_pos
+            nearest_vert = [0, self.tree.vertices[0].pos]
+            if self.collision_check(pos, nearest_vert[1]):
+                pos_idx = self.tree.add_vertex(pos, nearest_vert)
+                self.tree.add_edge(nearest_vert[0], pos_idx)
+                goal_added = True
+            else:
+                goal_added = False
+        
+        num_iter = 0; num_rewires = 0; goal_added = False
+        while not goal_added:
+            num_iter += 1
+            goal = False
+
+            # Sampling step
+            p = np.random.uniform() # goal biasing
+            if p < self.goal_bias:
+                pos = goal_pos
+                goal = True
+            else:
+                pos = self.sample()
+
+            # Get nearest vertex to the sample
+            nearest_vert = self.tree.get_nearest_pos(pos)
+            nearest_vert_idx = nearest_vert[0]
+            
+            sample_global_frame = laser_to_global(self.transformation_matrix, pos)
+            sample_marker = create_point_marker(sample_global_frame[:2], goal)
+            sample_array.markers.append(sample_marker)
+            self.create_waypoint_marker_array(sample_array)
+            
+            # Check obstacle-collision for potential edge
+            if self.collision_check(pos, nearest_vert[1]):
+                pos_idx = self.tree.add_vertex(pos, nearest_vert)
+                cost = self.tree.compute_distance(pos, nearest_vert[1])
+                self.tree.add_edge(nearest_vert_idx, pos_idx, edge_cost=cost, RRT_Star=True)
+                if goal:
+                    goal_added = True
+                
+                # Rewiring phase
+                if len(self.tree.vertices) > self.k:
+                    knn_idxs, knn_states = self.tree.get_k_nearest_neighbors(pos, self.k)
+                    for i in range(len(knn_states)):
+                        if knn_idxs[i] == pos_idx:
+                            continue
+                        if self.collision_check(knn_states[i], pos):
+                            old_cost = self.tree.vertices[pos_idx].cost
+                            # calculating the potential new cost for the sample
+                            c = self.tree.compute_distance(knn_states[i], pos)
+                            potential_parent_cost = self.tree.vertices[knn_idxs[i]].cost
+                            potential_new_cost = potential_parent_cost + c
+                            # checking for improvement
+                            if potential_new_cost < old_cost:
+                                self.tree.vertices[pos_idx].cost = potential_new_cost
+                                self.tree.edges[pos_idx] = knn_idxs[i]
+                                num_rewires += 1
+                    for i in range(len(knn_states)):
+                        if knn_idxs[i] == pos_idx:
+                            continue
+                        if self.collision_check(pos, knn_states[i]):
+                            old_cost = self.tree.vertices[knn_idxs[i]].cost
+                            # calculating the potential new cost for the neighbors
+                            c = self.tree.compute_distance(pos, knn_states[i])
+                            potential_parent_cost = self.tree.vertices[pos_idx].cost
+                            potential_new_cost = potential_parent_cost + c
+                            # checking for improvement
+                            if potential_new_cost < old_cost:
+                                self.tree.vertices[knn_idxs[i]].cost = potential_new_cost
+                                self.tree.edges[knn_idxs[i]] = pos_idx
+                                num_rewires += 1
+            else:
+                goal_added = False
+        
+        # Record the plan
+        plan = self.get_plan_from_tree(pos, pos_idx, nearest_vert)
+        if self.smoothing:
+            plan = self.smooth_tree(plan)
+        return plan
+        
+    def compute_cost(self, plan):
+        """ Compute and return the plan cost, which is the sum of the distances between steps """
+        return self.tree.get_vertex_for_pos(plan[-1]).cost
+
+    
+class KinoRRT_Planner(MotionPlanner):
+
+    def __init__(self):
+        MotionPlanner.__init__(self)
+        ## RRT Stuff
+        self.goal_bias = GOAL_BIAS
+        #self.check_goal_first = True
+        #self.smoothing = True
+        #self.k = 3
+
+    # still need to implement
+    def kinodynamic_collision_check(tree_point, heading_point):
+        return 0 
+    
+    # Parameters we still need to tune
+    t_max = 10
+    quit_radius = 10
+
+    # Need to check this
+    def plan(self):
+
+        goal_pos = self.get_goal_point()
+        while True: 
+            while True:
+        
+                sampled_point = self.sample() 
+                _, nearest_vert_pos = self.tree.get_nearest_pos(sampled_point)
+                nearest_vertex = self.tree.get_vertex_for_pos(nearest_vert_pos)
+                phi_0 = nearest_vertex.phi_0 
+
+                sampled_time = np.random.uniform(0, self.tmax)
+                sampled_angle_speed = np.random.uniform(-MAX_STEERING_ANGLE, MAX_STEERING_ANGLE)
+                sampled_velocity = np.random.uniform(0, MAX_VELOCITY)
+                
+                # Dubin's path 
+                x = (sampled_velocity/sampled_angle_speed)*np.cos(phi_0)*np.sin(sampled_angle_speed*sampled_time)
+                + (sampled_velocity/sampled_angle_speed)*np.sin(phi_0)*np.cos(sampled_angle_speed*sampled_time)
+                y = (sampled_velocity/sampled_angle_speed)*np.sin(phi_0)*np.sin(sampled_angle_speed*sampled_time)
+                - (sampled_velocity/sampled_angle_speed)*np.cos(phi_0)*np.cos(sampled_angle_speed*sampled_time)
+                heading_point = (x,y) + nearest_vert_pos 
+                
+
+                # If we bump into an obstacle then we resample. Otherwise we add the point to the tree and break  
+                if(self.kinodynamic_collision_check(nearest_vert, heading_point)):
+                    self.tree.add_vertex(heading_point, nearest_vert)
+                    self.tree.add_edge(nearest_vert, heading_point)
+                    heading_point_node = self.tree.get_vertex_for_pos(heading_point)
+                    heading_point_node.phi_0 = phi_0*sampled_time 
+                    break
+
+            if self.tree.compute_distance(heading_point, goal_pos) < self.quit_radius:
+                break
+            
+        nearest_vert = self.tree.get_nearest_pos(heading_point)
+        plan = self.get_plan_from_tree(heading_point, self.tree.get_idx_for_pos(heading_point), nearest_vert)
         if self.smoothing:
             plan = self.smooth_tree(plan)
         return plan
     
-    def collision_check(self, sample_pos, nearest_neighbor_pos):
-        pos_grid_idx = laser_to_grid_idx(sample_pos, self.grid_resolution, self.grid_length)
-        nearest_grid_idx = laser_to_grid_idx(nearest_neighbor_pos, self.grid_resolution, self.grid_length)
-        free_cells = traverse_grid(nearest_grid_idx, pos_grid_idx)
-        for cell in free_cells:
-            if (cell[0] * cell[1] < 0) or (cell[0] >= self.grid_width) or (cell[1] >= self.grid_length):
-                continue
-            if self.occ_grid[cell[0]][cell[1]] == int(100):
-                return False
-        return True
-    
-    def sample(self, free_only = True):
-        """ This method should randomly sample the free space, and returns a viable point """
-        if free_only:
-            i, j = np.random.randint(self.grid_width), np.random.randint(self.grid_length)
-            while self.occ_grid[i][j] != int(0):
-                i, j = np.random.randint(self.grid_width), np.random.randint(self.grid_length)
-            
-            upper_bound_x = (j + 1)*self.grid_resolution
-            lower_bound_x = (j)*self.grid_resolution
-            upper_bound_y = (i + 1 - self.grid_length/2)*self.grid_resolution
-            lower_bound_y = (i - self.grid_length/2)*self.grid_resolution 
-
-            x = np.random.uniform(low=lower_bound_x, high=upper_bound_x)
-            y = np.random.uniform(low=lower_bound_y, high=upper_bound_y)
-        else:
-            x = np.random.uniform(low=0, high=self.grid_resolution*self.grid_width)
-            y = np.random.uniform(low=-self.grid_resolution*self.grid_length/2, high=self.grid_resolution*self.grid_length/2)
-        return [x,y]
-
-    #Takes in an array of 2d points. Need to smooth the path from start to end (not bumping into obstacles)
-    def smooth_tree(self, path):
-        current_point = path[0] # first point
-        path_to_check = path
-        final_path = []
-        while not (current_point[0] == path[len(path)-1][0] and current_point[1] == path[len(path)-1][1]): # while first point is not end point
-            for i in range(len(path_to_check)):
-                point_to_check = path_to_check[len(path_to_check)-1-i] #check points from back to front
-                if self.collision_check(current_point, point_to_check):  #if don't collide
-                    path_to_check = path_to_check[len(path_to_check)-1-i:] #rest of path to check 
-                    final_path.append(current_point) #add previous node to path 
-                    current_point = point_to_check #next node to check is first node in new path
-                    break
-        final_path.append(path[len(path)-1])
-        return final_path
-
-    def create_waypoint_marker_array(self, markerArray, sample=True):
-        id = 0
-        for m in markerArray.markers:
-            m.id = id
-            id += 1
-        if sample:
-            self.sample_viz_pub.publish(markerArray)
-        else:
-            self.plan_viz_pub.publish(markerArray)
-        return
-    
-    def create_plan_marker(self, plan):
-        """ Given a plan, creates the necessary Marker data for RViZ visualization """
-        marker = Marker()
-        marker.header.frame_id, marker.header.stamp = "map", rospy.Time.now()
-        marker.id, marker.action, marker.type = 0, 0, 5 # ID, adds the marker, line_list
-
-        for p in range(len(plan)-1):
-            pt1 = Point()
-            pt1_global = laser_to_global(self.transformation_matrix, plan[p])
-            pt1.x, pt1.y = pt1_global[0], pt1_global[1]
-            marker.points.append(pt1)
-
-            pt2 = Point()
-            pt2_global = laser_to_global(self.transformation_matrix, plan[p+1])
-            pt2.x, pt2.y = pt2_global[0], pt2_global[1]
-            marker.points.append(pt2)
-
-        marker.scale.x, marker.color.a = 0.1, 1.0
-        marker.color.r, marker.color.g, marker.color.b = 1.0, 0.0, 0.0 
-        marker.pose.orientation.x, marker.pose.orientation.y = 0.0, 0.0
-        marker.pose.orientation.z, marker.pose.orientation.w = 0.0, 1.0
-        return marker
-    
-    def compute_cost(self, plan):
-        '''
-        Compute and return the plan cost, which is the sum of the distances between steps.
-        @param plan A given plan for the robot.
-        '''
-        return self.tree.get_vertex_for_pos(plan[-1]).cost
-    
-    def run(self):
-        if self.current_position is not None and self.current_orientation is not None:
-            self.tree = RRTTree()
-            self.tree.add_vertex([0,0], parent=None)
-            new_waypoints = self.plan()
-            if new_waypoints is not None:
-                wp_msg = self.create_waypoint_message(new_waypoints)
-                self.wp_pub.publish(wp_msg)
-                plan_marker = self.create_plan_marker(new_waypoints)
-                self.plan_viz_pub.publish(plan_marker)
-
+PLANNER = "rrt"
 def main():
     rospy.init_node('rrt_mp_node')
-    mp = MotionPlanner()
-    rate = rospy.Rate(replan_rate)
+    if PLANNER == "rrt":
+        mp = RRT_Planner()
+    elif PLANNER == "rrt_star":
+        mp = RRTStar_Planner()
+    elif PLANNER == "kino_rrt":
+        mp = KinoRRT_Planner()
+    
+    rate = rospy.Rate(REPLAN_RATE)
     check_time = False
     tot_time = 0; counter = 0
     while not rospy.is_shutdown():
